@@ -1,0 +1,9 @@
+# транскрипты видео — только для генерации, не публикуются
+content_src/transcripts/
+.claude/
+.DS_Store
+__pycache__/
+# открытый контент и пароль — только локально; на GitHub уходит зашифрованный enc/
+data/
+secrets.local.json
+supabase/setup.local.sql
