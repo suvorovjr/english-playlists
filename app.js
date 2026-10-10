@@ -43,7 +43,7 @@ const BONUS_DONE = 5, BONUS_PERFECT = 5, MAX_FREEZES = 2;
 const defaults = () => ({
   xp: 0, streak: 0, longest: 0, lastDay: null, freezes: 0, days: {}, today: { date: null, xp: 0 }, last: null,
   lessons: {}, items: {}, updatedAt: 0,
-  settings: { goal: 30, tts: true, speech: true, sfx: true, tab: 'A1', theme: 'auto', speechPauseUntil: 0, voice: '' },
+  settings: { goal: 30, tts: true, speech: true, sfx: true, kbHints: true, tab: 'A1', theme: 'auto', speechPauseUntil: 0, voice: '' },
 });
 function normalize(raw) {
   const d = defaults();
@@ -895,6 +895,10 @@ function finishSession() {
 /* ---------------- exercise renderers ---------------- */
 const head = (kind, extra = '') => `<div class="ex-kind">${KIND_TITLE[kind]}</div>${extra}`;
 const sentTargets = s => [s.en, ...(s.alt || [])];
+// подсказки и автозамена клавиатуры в полях ответа (настройка «Подсказки клавиатуры»)
+const kbAttrs = () => P.settings.kbHints
+  ? 'lang="en" autocorrect="on" spellcheck="true"'
+  : 'lang="en" autocorrect="off" spellcheck="false"';
 // что озвучить после ответа: сам вариант, если для него есть запись, иначе основную фразу урока
 const spoken = (target, s) => (P.settings.voice || clipURL(target)) ? target : s.en;
 
@@ -1007,7 +1011,7 @@ const RENDER = {
     const full = ans => (a + (ans === '—' ? '' : ans) + b).replace(/\s+/g, ' ').trim();
     const zeroOK = g.answer === '—';
     ex.innerHTML = head('gapType', `<div class="gap-sent">${esc(a)}<span class="blank">?</span>${esc(b)}</div><div class="sub">${esc(g.ru)}</div>
-      <input class="answer" id="inp" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="${zeroOK ? 'Если слово не нужно — поставьте «-»' : 'Пропущенное слово'}">`);
+      <input class="answer" id="inp" autocomplete="off" autocapitalize="off" ${kbAttrs()} placeholder="${zeroOK ? 'Если слово не нужно — поставьте «-»' : 'Пропущенное слово'}">`);
     const inp = $('#inp');
     const ac = actionCheck(() => {
       const val = inp.value.trim();
@@ -1117,7 +1121,7 @@ function typed(task, ex, listen) {
   ex.innerHTML = head(task.kind, listen
     ? `<div class="big-audio"><button id="play" aria-label="Прослушать">🔊</button><button class="slow" id="slow" aria-label="Медленно">🐢</button></div>`
     : `<div class="prompt"><div class="bubble">${esc(s.ru)}</div></div>`)
-    + `<textarea class="answer" id="inp" rows="3" autocomplete="off" autocapitalize="sentences" autocorrect="off" spellcheck="false" placeholder="${listen ? 'Напишите по-английски' : 'Перевод на английский'}"></textarea>`;
+    + `<textarea class="answer" id="inp" rows="3" autocomplete="off" autocapitalize="sentences" ${kbAttrs()} placeholder="${listen ? 'Напишите по-английски' : 'Перевод на английский'}"></textarea>`;
   if (listen) { $('#play').onclick = () => say(s.en); $('#slow').onclick = () => say(s.en, 0.6); setTimeout(() => say(s.en), 250); }
   const inp = $('#inp');
   const ac = actionCheck(() => {
@@ -1199,6 +1203,8 @@ function screenSettings() {
     <div class="list-row"><span>Озвучивать ответы</span><label class="switch"><input type="checkbox" id="tts" ${st.tts ? 'checked' : ''}><span></span></label></div>
     <div class="list-row"><span>Упражнения на говорение${SR ? '' : '<br><span class="small muted">Браузер не поддерживает распознавание речи</span>'}</span>
       <label class="switch"><input type="checkbox" id="speech" ${st.speech ? 'checked' : ''} ${SR ? '' : 'disabled'}><span></span></label></div>
+    <div class="list-row"><span>Подсказки клавиатуры<br><span class="small muted">Автодополнение и автозамена при вводе ответа. Без них сложнее — для полной проверки себя</span></span>
+      <label class="switch"><input type="checkbox" id="kbHints" ${st.kbHints ? 'checked' : ''}><span></span></label></div>
     <div class="list-row"><span>Звуки</span><label class="switch"><input type="checkbox" id="sfx" ${st.sfx ? 'checked' : ''}><span></span></label></div>
     <div class="list-row"><span>Голос</span><select id="voice"><option value="">Нейросеть (рекомендуется)</option>${vs.map(v => `<option ${v.name === st.voice ? 'selected' : ''}>${esc(v.name)}</option>`).join('')}</select></div>
     <div class="list-row"><span>Тема</span><select id="theme">${[['auto', 'Как в системе'], ['light', 'Светлая'], ['dark', 'Тёмная']].map(([v, n]) => `<option value="${v}" ${v === st.theme ? 'selected' : ''}>${n}</option>`).join('')}</select></div>
@@ -1216,6 +1222,7 @@ function screenSettings() {
   bind('tts', t => st.tts = t.checked);
   bind('speech', t => { st.speech = t.checked; st.speechPauseUntil = 0; });
   bind('sfx', t => st.sfx = t.checked);
+  bind('kbHints', t => st.kbHints = t.checked);
   bind('voice', t => { st.voice = t.value; loadAudio('A1-01').then(() => say('I want to tell you that you look great.')); });
   bind('theme', t => { st.theme = t.value; applyTheme(); });
   $('#logout').onclick = async () => {
