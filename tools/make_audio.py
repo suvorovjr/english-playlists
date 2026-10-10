@@ -1,6 +1,7 @@
 """Озвучивает уроки нейросетевым голосом (Kokoro) и собирает аудиопакеты data/audio/<ID>.pack.
 
-Что озвучивается: английские фразы, слова, предложения из пропусков (с ответом) и примеры конспекта.
+Что озвучивается: английские фразы, слова, предложения из пропусков (с ответом), примеры конспекта
+и отдельные слова для плиток.
 Готовые клипы кэшируются в content_src/audio_cache/, поэтому повторный запуск озвучивает только новое.
 Пакеты затем шифрует `node tools/encrypt.mjs` (→ enc/audio/<ID>.bin).
 
@@ -43,6 +44,8 @@ def lesson_texts(d: dict) -> list[str]:
     texts = [s["en"] for s in d["sentences"]] + [v["en"] for v in d["vocab"]]
     texts += [gap_full(g) for g in d["gaps"]]
     texts += [ex[0] for t in d["theory"] for ex in t.get("ex", [])]
+    # отдельные слова для плиток (в нижнем регистре — так их ищет приложение)
+    texts += [w.lower() for s in d["sentences"] for w in re.sub(r'[.!?;:"«»(),]', " ", s["en"]).split()]
     seen, out = set(), []
     for t in texts:
         t = t.strip()

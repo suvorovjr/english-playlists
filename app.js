@@ -888,6 +888,8 @@ function finishSession() {
 /* ---------------- exercise renderers ---------------- */
 const head = (kind, extra = '') => `<div class="ex-kind">${KIND_TITLE[kind]}</div>${extra}`;
 const sentTargets = s => [s.en, ...(s.alt || [])];
+// что озвучить после ответа: сам вариант, если для него есть запись, иначе основную фразу урока
+const spoken = (target, s) => (P.settings.voice || clipURL(target)) ? target : s.en;
 
 function renderOptions(container, options, onSelect) {
   container.innerHTML = `<div class="options">${options.map((o, i) => `<button class="opt" data-i="${i}">${esc(o)}</button>`).join('')}</div>`;
@@ -1084,7 +1086,7 @@ function tiles(task, ex, listen) {
     $$('.tile', ex).forEach(t => t.disabled = true);
     feedback(res.ok, {
       html: (res.ok ? '' : diffHTML(text, res.target)) + (listen ? `<div class="fb-explain">${esc(res.ok ? s.en + ' — ' : '')}${esc(s.ru)}</div>` : ''),
-      speakText: res.ok ? text : s.en,
+      speakText: res.ok ? spoken(res.target, s) : s.en,
     });
   });
   const redraw = () => {
@@ -1097,7 +1099,7 @@ function tiles(task, ex, listen) {
     const id = +t.dataset.id;
     if (answer.includes(id)) return;
     answer.push(id);
-    if (!listen) say(bank[id].w, 1, { clipOnly: true });
+    if (!listen) say(bank[id].w.toLowerCase(), 1, { clipOnly: true });
     redraw();
   });
 }
@@ -1121,7 +1123,7 @@ function typed(task, ex, listen) {
     else if (res.typo) html = `Правильно: <b>${esc(res.target)}</b>`;
     else if (!listen && canon(res.target) !== canon(s.en)) html = `Другой вариант: ${esc(s.en)}`;
     if (listen) html += `<div class="fb-explain">${esc(s.ru)}</div>`;
-    feedback(res.ok, { title: res.typo ? 'Почти! Опечатка' : undefined, html, speakText: res.ok ? res.target : s.en });
+    feedback(res.ok, { title: res.typo ? 'Почти! Опечатка' : undefined, html, speakText: res.ok ? spoken(res.target, s) : s.en });
   }, { skip: () => { inp.disabled = true; giveUp(task, s); } });
   inp.oninput = () => ac.enable(inp.value.trim().length > 0);
   inp.onkeydown = e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('#checkBtn')?.click(); } };
@@ -1167,7 +1169,7 @@ function speak(task, ex, read) {
       feedback(res.ok, {
         title: res.ok ? (res.fuzzy ? 'Засчитано!' : undefined) : 'Не совсем',
         html: res.ok && !res.fuzzy ? '' : `Правильно: ${diffHTML(alts[0], res.target)}`,
-        speakText: res.target,
+        speakText: spoken(res.target, s),
       });
     } catch (err) {
       busy = false; mic.classList.remove('rec');
