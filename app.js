@@ -241,8 +241,15 @@ async function flushPoints() {
   } catch (e) { /* офлайн — отправим позже */ }
   flushing = false;
 }
+let hiddenAt = 0;
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'hidden' && AUTH) { save(false); pushProgress(); flushPoints(); }
+  if (document.visibilityState === 'hidden') {
+    hiddenAt = Date.now();
+    if (AUTH) { save(false); pushProgress(); flushPoints(); }
+  } else if (hiddenAt && Date.now() - hiddenAt > 10 * 60000 && !S && navigator.onLine) {
+    // приложение «с экрана Домой» не перезагружается само — подтягиваем свежую версию после долгого перерыва
+    location.reload();
+  }
 });
 window.addEventListener('online', () => flushPoints());
 
