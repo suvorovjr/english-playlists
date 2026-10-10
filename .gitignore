@@ -7,3 +7,6 @@ __pycache__/
 data/
 secrets.local.json
 supabase/setup.local.sql
+content_src/audio_cache/
+content_src/voice_samples/
+.tts/

@@ -32,13 +32,17 @@ export function secrets() {
 
 const importKey = raw => subtle.importKey('raw', Buffer.from(raw, 'base64'), 'AES-GCM', false, ['encrypt', 'decrypt']);
 
-async function encryptFile(key, src, dst) {
-  const iv = crypto.getRandomValues(new Uint8Array(12));
+// IV = SHA-256(ключ ‖ содержимое)[:12]: одинаковый файл → одинаковый шифротекст (нет лишних изменений в git),
+// а один IV никогда не встречается с разным содержимым.
+async function encryptFile(key, rawKey, src, dst, { json = true } = {}) {
   const plain = readFileSync(src);
-  JSON.parse(plain); // не шифруем битый JSON
+  if (json) JSON.parse(plain); // не шифруем битый JSON
+  const iv = new Uint8Array(await subtle.digest('SHA-256', Buffer.concat([Buffer.from(rawKey, 'base64'), plain]))).slice(0, 12);
   const ct = new Uint8Array(await subtle.encrypt({ name: 'AES-GCM', iv }, key, plain));
+  const out = Buffer.concat([iv, ct]);
+  if (existsSync(dst) && readFileSync(dst).equals(out)) return;
   mkdirSync(dirname(dst), { recursive: true });
-  writeFileSync(dst, Buffer.concat([iv, ct]));
+  writeFileSync(dst, out);
 }
 async function decryptFile(key, src, dst) {
   const buf = readFileSync(src);
@@ -50,21 +54,35 @@ async function decryptFile(key, src, dst) {
 if (process.argv[1] === fileURLToPath(import.meta.url)) await main();
 
 async function main() {
-const key = await importKey(secrets().contentKey);
+const rawKey = secrets().contentKey;
+const key = await importKey(rawKey);
 mkdirSync(join(ENC, 'lessons'), { recursive: true });
 rmSync(join(ENC, 'meta.json'), { force: true });
 
+const sync = async (srcDir, ext, dstDir, json) => {
+  if (!existsSync(srcDir)) return 0;
+  const files = readdirSync(srcDir).filter(f => f.endsWith(ext));
+  const keep = new Set(files.map(f => f.slice(0, -ext.length) + '.bin'));
+  for (const f of files) await encryptFile(key, rawKey, join(srcDir, f), join(dstDir, f.slice(0, -ext.length) + '.bin'), { json });
+  if (existsSync(dstDir)) for (const f of readdirSync(dstDir)) if (!keep.has(f)) rmSync(join(dstDir, f));
+  return files.length;
+};
+const unsync = async (srcDir, dstDir, ext) => {
+  if (!existsSync(srcDir)) return 0;
+  const files = readdirSync(srcDir).filter(f => f.endsWith('.bin'));
+  for (const f of files) await decryptFile(key, join(srcDir, f), join(dstDir, f.replace(/\.bin$/, ext)));
+  return files.length;
+};
+
 if (process.argv.includes('--decrypt')) {
   await decryptFile(key, join(ENC, 'index.bin'), join(DATA, 'index.json'));
-  const files = readdirSync(join(ENC, 'lessons')).filter(f => f.endsWith('.bin'));
-  for (const f of files) await decryptFile(key, join(ENC, 'lessons', f), join(DATA, 'lessons', f.replace(/\.bin$/, '.json')));
-  console.log(`Расшифровано: index + ${files.length} уроков → data/`);
+  const n = await unsync(join(ENC, 'lessons'), join(DATA, 'lessons'), '.json');
+  const a = await unsync(join(ENC, 'audio'), join(DATA, 'audio'), '.pack');
+  console.log(`Расшифровано: index + ${n} уроков + ${a} аудиопакетов → data/`);
 } else {
-  await encryptFile(key, join(DATA, 'index.json'), join(ENC, 'index.bin'));
-  const lessons = readdirSync(join(DATA, 'lessons')).filter(f => f.endsWith('.json'));
-  const keep = new Set(lessons.map(f => f.replace(/\.json$/, '.bin')));
-  for (const f of lessons) await encryptFile(key, join(DATA, 'lessons', f), join(ENC, 'lessons', f.replace(/\.json$/, '.bin')));
-  for (const f of readdirSync(join(ENC, 'lessons'))) if (!keep.has(f)) rmSync(join(ENC, 'lessons', f));
-  console.log(`Зашифровано: index + ${lessons.length} уроков → enc/`);
+  await encryptFile(key, rawKey, join(DATA, 'index.json'), join(ENC, 'index.bin'));
+  const n = await sync(join(DATA, 'lessons'), '.json', join(ENC, 'lessons'), true);
+  const a = await sync(join(DATA, 'audio'), '.pack', join(ENC, 'audio'), false);
+  console.log(`Зашифровано: index + ${n} уроков + ${a} аудиопакетов → enc/`);
 }
 }

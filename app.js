@@ -249,14 +249,15 @@ window.addEventListener('online', () => flushPoints());
 /* ---------------- контент (зашифрован, ключ выдаёт сервер участникам) ---------------- */
 let INDEX = null;
 const LESSONS = {};
-async function fetchEnc(path) {
+async function fetchEncRaw(path) {
   const r = await fetch(`enc/${path}.bin`);
   if (!r.ok) throw new Error(r.status === 404 ? 'Урок не найден' : 'Нет соединения');
   const buf = new Uint8Array(await r.arrayBuffer());
-  let plain;
-  try { plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: buf.slice(0, 12) }, KEY, buf.slice(12)); }
+  try { return new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: buf.slice(0, 12) }, KEY, buf.slice(12))); }
   catch (e) { throw Object.assign(new Error('Ключ устарел'), { badKey: true }); }
-  return JSON.parse(new TextDecoder().decode(plain));
+}
+async function fetchEnc(path) {
+  return JSON.parse(new TextDecoder().decode(await fetchEncRaw(path)));
 }
 async function getIndex() {
   if (!INDEX) INDEX = await fetchEnc('index');
@@ -264,6 +265,7 @@ async function getIndex() {
 }
 async function getLesson(id) {
   if (!LESSONS[id]) LESSONS[id] = await fetchEnc(`lessons/${id}`);
+  loadAudio(id);
   return LESSONS[id];
 }
 
@@ -425,7 +427,35 @@ function diffHTML(input, target) {
   return tokens.map((t, k) => keep.has(k) || !tw[k] ? esc(t) : `<span class="miss">${esc(t)}</span>`).join(' ');
 }
 
-/* ---------------- audio ---------------- */
+/* ---------------- audio ----------------
+   Основной голос — нейросетевой (Kokoro, af_heart): фразы урока озвучены заранее и лежат
+   зашифрованными пакетами enc/audio/<ID>.bin. Чего нет в пакете — читает системный синтезатор. */
+const PACKS = {};   // id → Promise<pack|null>
+const LOADED = {};  // id → pack { index: {текст: [смещение, длина]}, bytes, urls }
+const player = new Audio();
+player.preload = 'auto';
+function loadAudio(id) {
+  PACKS[id] ||= fetchEncRaw(`audio/${id}`).then(buf => {
+    const n = new DataView(buf.buffer, buf.byteOffset, 4).getUint32(0);
+    const pack = { index: JSON.parse(new TextDecoder().decode(buf.subarray(4, 4 + n))), bytes: buf.subarray(4 + n), urls: {} };
+    return (LOADED[id] = pack);
+  }).catch(() => { delete PACKS[id]; return null; });
+  return PACKS[id];
+}
+/** дождаться пакетов, но не дольше ms — без сети тренировка не должна зависать */
+const audioReady = (ids, ms = 4000) => Promise.race([Promise.all(ids.map(loadAudio)), new Promise(r => setTimeout(r, ms))]);
+function clipURL(text) {
+  const key = text.trim();
+  for (const p of Object.values(LOADED)) {
+    const r = p.index[key];
+    if (r) return (p.urls[key] ||= URL.createObjectURL(new Blob([p.bytes.subarray(r[0], r[0] + r[1])], { type: 'audio/mpeg' })));
+  }
+  return null;
+}
+// iOS разрешает программный play() только элементу, который уже играл по касанию — «разблокируем» его
+const SILENT = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=';
+document.addEventListener('pointerdown', () => { if (!player.src) { player.src = SILENT; player.play().catch(() => {}); } }, { once: true, capture: true });
+
 let voices = [];
 function loadVoices() {
   if (!('speechSynthesis' in window)) return;
@@ -434,19 +464,31 @@ function loadVoices() {
 if ('speechSynthesis' in window) { loadVoices(); speechSynthesis.onvoiceschanged = loadVoices; }
 function pickVoice() {
   if (P.settings.voice) { const v = voices.find(v => v.name === P.settings.voice); if (v) return v; }
-  const pref = ['Samantha', 'Google US English', 'Microsoft Aria', 'Karen', 'Daniel', 'Alex'];
-  for (const name of pref) { const v = voices.find(v => v.name.includes(name)); if (v) return v; }
+  const pref = ['Premium', 'Enhanced', 'Natural', 'Neural', 'Samantha', 'Google US English', 'Microsoft Aria', 'Karen', 'Daniel'];
+  for (const name of pref) { const v = voices.find(v => v.name.includes(name) && /en[-_]US/i.test(v.lang)) || voices.find(v => v.name.includes(name)); if (v) return v; }
   return voices.find(v => /en[-_]US/i.test(v.lang)) || voices[0];
 }
-function say(text, rate = 0.95) {
-  if (!('speechSynthesis' in window) || !text) return;
-  speechSynthesis.cancel();
+function sysSay(text, rate) {
+  if (!('speechSynthesis' in window)) return;
   const u = new SpeechSynthesisUtterance(text);
   const v = pickVoice();
   if (v) u.voice = v;
   u.lang = v?.lang || 'en-US';
   u.rate = rate;
   speechSynthesis.speak(u);
+}
+/** озвучить: rate < 0.8 — медленно; clipOnly — только если есть нейросетевая запись */
+function say(text, rate = 1, { clipOnly = false } = {}) {
+  if (!text) return;
+  const url = !P.settings.voice && clipURL(text);
+  if (!url && clipOnly) return;
+  if ('speechSynthesis' in window) speechSynthesis.cancel();
+  player.pause();
+  if (!url) return sysSay(text, rate < 0.8 ? 0.6 : 0.95);
+  player.src = url;
+  player.preservesPitch = true;
+  player.playbackRate = rate < 0.8 ? 0.7 : 1;
+  player.play().catch(() => sysSay(text, rate < 0.8 ? 0.6 : 0.95));
 }
 let actx;
 function sfx(ok) {
@@ -720,6 +762,7 @@ async function screenPractice(id, level) {
   await getIndex();
   const L = await getLesson(id);
   level = Math.max(1, Math.min(MAX_LEVEL, +level || 1));
+  await audioReady([id]);
   const tasks = buildLessonSession(L, level);
   startSession({ tasks, lessonId: id, level, back: `#/lesson/${id}` });
 }
@@ -739,6 +782,7 @@ async function screenReview() {
   }
   app().innerHTML = '<div class="loading">Собираю повторение…</div>';
   const tasks = await buildReviewSession(keys);
+  await audioReady([...new Set(tasks.map(t => t.L.id))]);
   startSession({ tasks, title, back: '#/' });
 }
 function startSession(opts) {
@@ -1053,7 +1097,7 @@ function tiles(task, ex, listen) {
     const id = +t.dataset.id;
     if (answer.includes(id)) return;
     answer.push(id);
-    if (!listen) say(bank[id].w, 1);
+    if (!listen) say(bank[id].w, 1, { clipOnly: true });
     redraw();
   });
 }
@@ -1147,7 +1191,7 @@ function screenSettings() {
     <div class="list-row"><span>Упражнения на говорение${SR ? '' : '<br><span class="small muted">Браузер не поддерживает распознавание речи</span>'}</span>
       <label class="switch"><input type="checkbox" id="speech" ${st.speech ? 'checked' : ''} ${SR ? '' : 'disabled'}><span></span></label></div>
     <div class="list-row"><span>Звуки</span><label class="switch"><input type="checkbox" id="sfx" ${st.sfx ? 'checked' : ''}><span></span></label></div>
-    <div class="list-row"><span>Голос</span><select id="voice"><option value="">Авто</option>${vs.map(v => `<option ${v.name === st.voice ? 'selected' : ''}>${esc(v.name)}</option>`).join('')}</select></div>
+    <div class="list-row"><span>Голос</span><select id="voice"><option value="">Нейросеть (рекомендуется)</option>${vs.map(v => `<option ${v.name === st.voice ? 'selected' : ''}>${esc(v.name)}</option>`).join('')}</select></div>
     <div class="list-row"><span>Тема</span><select id="theme">${[['auto', 'Как в системе'], ['light', 'Светлая'], ['dark', 'Тёмная']].map(([v, n]) => `<option value="${v}" ${v === st.theme ? 'selected' : ''}>${n}</option>`).join('')}</select></div>
   </div>
   <div class="card stack" style="margin-top:12px">
@@ -1163,7 +1207,7 @@ function screenSettings() {
   bind('tts', t => st.tts = t.checked);
   bind('speech', t => { st.speech = t.checked; st.speechPauseUntil = 0; });
   bind('sfx', t => st.sfx = t.checked);
-  bind('voice', t => { st.voice = t.value; say('Hello! This is my voice.'); });
+  bind('voice', t => { st.voice = t.value; loadAudio('A1-01').then(() => say('I want to tell you that you look great.')); });
   bind('theme', t => { st.theme = t.value; applyTheme(); });
   $('#logout').onclick = async () => {
     if (!confirm('Выйти из аккаунта?')) return;
